@@ -24,6 +24,23 @@ updates:
     target-branch: "develop"
     versioning-strategy: "auto"
 
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 5
+    labels:
+      - "ci"
+      - "dependencies"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    rebase-strategy: "auto"
+    target-branch: "develop"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
