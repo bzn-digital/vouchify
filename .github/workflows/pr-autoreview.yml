@@ -1,0 +1,119 @@
+name: PR Auto-Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: read
+  checks: write
+
+jobs:
+  pr-validation:
+    name: Validação do PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Valida tipo do PR pela branch
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          echo "Branch de origem: $BRANCH"
+
+          VALID=false
+          if [[ "$BRANCH" == feature/* ]]; then VALID=true; TYPE="feature"; fi
+          if [[ "$BRANCH" == bugfix/* ]];  then VALID=true; TYPE="bugfix"; fi
+          if [[ "$BRANCH" == hotfix/* ]];  then VALID=true; TYPE="hotfix"; fi
+          if [[ "$BRANCH" == release/* ]]; then VALID=true; TYPE="release"; fi
+
+          if [ "$VALID" = false ]; then
+            echo "::error::Branch '$BRANCH' não segue o padrão GitFlow (feature/*, bugfix/*, hotfix/*, release/*)"
+            exit 1
+          fi
+          echo "Tipo do PR: $TYPE"
+
+      - name: Valida destino do PR
+        run: |
+          BASE="${{ github.base_ref }}"
+          HEAD="${{ github.head_ref }}"
+
+          if [[ "$HEAD" == hotfix/* ]] || [[ "$HEAD" == release/* ]]; then
+            if [ "$BASE" != "main" ]; then
+              echo "::error::Branches hotfix/* e release/* devem ter 'main' como destino"
+              exit 1
+            fi
+          else
+            if [ "$BASE" != "develop" ]; then
+              echo "::error::Branches feature/* e bugfix/* devem ter 'develop' como destino"
+              exit 1
+            fi
+          fi
+
+      - name: Valida conventional commits
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          COMMITS=$(git log "origin/${{ github.base_ref }}..${{ github.head_ref }}" --pretty=format:"%s")
+
+          VALID_PREFIXES="^(feat|fix|bug|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?:"
+          INVALID=""
+
+          while IFS= read -r commit; do
+            if [[ ! "$commit" =~ $VALID_PREFIXES ]]; then
+              INVALID="$INVALID\n  - $commit"
+            fi
+          done <<< "$COMMITS"
+
+          if [ -n "$INVALID" ]; then
+            echo "::error::Commits não seguem o padrão Conventional Commits:$INVALID"
+            exit 1
+          fi
+          echo "Todos os commits seguem o padrão Conventional Commits"
+
+      - name: Verifica se CHANGELOG.md foi atualizado
+        if: github.event.pull_request.draft == false
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          CHANGES=$(git diff --name-only "origin/${{ github.base_ref }}" "${{ github.head_ref }}")
+
+          if echo "$CHANGES" | grep -q "CHANGELOG.md"; then
+            echo "CHANGELOG.md foi atualizado"
+          else
+            echo "::warning::CHANGELOG.md não foi atualizado neste PR. Considere adicionar uma entrada."
+          fi
+
+      - name: Comentário de auto-review
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = '${{ github.head_ref }}';
+            const base = '${{ github.base_ref }}';
+            let type = 'outro';
+            if (branch.startsWith('feature/')) type = 'feature';
+            else if (branch.startsWith('bugfix/')) type = 'bugfix';
+            else if (branch.startsWith('hotfix/')) type = 'hotfix';
+            else if (branch.startsWith('release/')) type = 'release';
+
+            const emoji = { feature: '✨', bugfix: '🐛', hotfix: '🚑', release: '🚀' };
+
+            const body = `## ${emoji[type] || '📝'} Auto-Review — Aprovado
+
+            | Verificação | Status |
+            |-------------|--------|
+            | Padrão de branch GitFlow | ✅ |
+            | Destino correto (\`${base}\`) | ✅ |
+            | Conventional Commits | ✅ |
+            | CHANGELOG.md atualizado | ℹ️ Verificado |
+
+            > PR do tipo **${type}** em \`${branch}\` → \`${base}\``;
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
